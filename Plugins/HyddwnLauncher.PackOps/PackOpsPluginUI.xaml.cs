@@ -97,7 +97,7 @@ namespace HyddwnLauncher.PackOps
 			await Task.Run(() =>
 			{
 				foreach (var packFilePath in Directory.EnumerateFiles($"{Path.GetDirectoryName(_clientProfile.Location)}\\package",
-					"*.pack", SearchOption.TopDirectoryOnly).ToList().OrderBy(a => a))
+					"*.pack", SearchOption.TopDirectoryOnly).OrderBy(a => a).ToList())
 					Dispatcher.Invoke(() => PackOperationsViewModels.Add(new PackOperationsViewModel(packFilePath)));
 
 				var packViewModelWorkingSet = PackOperationsViewModels.Where(pvm => pvm.IsSequenceTargetable)
@@ -105,8 +105,8 @@ namespace HyddwnLauncher.PackOps
 
 				Dispatcher.Invoke(() =>
 				{
-					MaximumPackVersion = packViewModelWorkingSet.LastOrDefault().PackVersion;
-					MinimumPackVersion = FromValue = ToValue = packViewModelWorkingSet.FirstOrDefault().PackVersion;
+					MaximumPackVersion = ToValue = packViewModelWorkingSet.LastOrDefault().PackVersion;
+					MinimumPackVersion = FromValue  = packViewModelWorkingSet.FirstOrDefault().PackVersion;
 				});
 			});
 		}
@@ -144,8 +144,7 @@ namespace HyddwnLauncher.PackOps
 
 		private async Task Refresh()
 		{
-			if (_clientProfile == null) return;
-			if (string.IsNullOrWhiteSpace(_clientProfile.Location)) return;
+		    if (string.IsNullOrWhiteSpace(_clientProfile?.Location)) return;
 
 			await Populate();
 
@@ -228,6 +227,8 @@ namespace HyddwnLauncher.PackOps
 
 		private async void PackOperationsMergePacksOnClick(object sender, RoutedEventArgs e)
 		{
+		    bool exceptionThrown = false;
+
 			List<PackListEntry> packEntryCollection;
 			var selectedPackViewModels = PackOperationsViewModels
 				.Where(pvm => pvm.IsSequenceTargetable && pvm.PackVersion >= FromValue && pvm.PackVersion <= ToValue)
@@ -235,91 +236,116 @@ namespace HyddwnLauncher.PackOps
 			if (selectedPackViewModels.Count < 2) return;
 
 			// Reader must be kept open to pull the data streams
-			using (var packReader = new PackReader())
-			{
-				_pluginContext.SetPatcherState(true);
-				PackOperationsLoader.IsOpen = true;
-				await Task.Delay(500);
+		    using (var packReader = new PackReader())
+		    {
+		        _pluginContext.SetPatcherState(true);
+		        PackOperationsLoader.IsOpen = true;
+		        await Task.Delay(500);
 
-				ProgressBar.Value = 0;
-				ProgressBar.IsIndeterminate = true;
-				ProgressText.Text = "Getting Entries...";
+		        ProgressBar.Value = 0;
+		        ProgressBar.IsIndeterminate = true;
+		        ProgressText.Text = "Getting Entries...";
 
-				await Task.Run(() =>
-				{
-					// This will then only take the overrides between the selected pack files you would like to merge
-					foreach (var packViewModel in selectedPackViewModels)
-						try
-						{
-							packReader.Load(packViewModel.FilePath);
-						}
-						catch (Exception ex)
-						{
-							_pluginContext.LogException(ex, false);
-						}
-				});
+		        await Task.Run(() =>
+		        {
+		            // This will then only take the overrides between the selected pack files you would like to merge
+		            foreach (var packViewModel in selectedPackViewModels)
+		                try
+		                {
+		                    packReader.Load(packViewModel.FilePath);
+		                }
+		                catch (Exception ex)
+		                {
+		                    _pluginContext.LogException(ex, false);
+		                }
+		        });
 
-				packEntryCollection = packReader.GetEntries().OrderBy(ple => ple.PackFilePath).ThenBy(ple => ple.FullName).ToList();
+		        packEntryCollection = packReader.GetEntries().OrderBy(ple => ple.PackFilePath).ThenBy(ple => ple.FullName)
+		            .ToList();
 
-				const string packagePath = "package";
+                const string packagePath = "package";
 
-				await Task.Run(() =>
-				{
-					double entries = packEntryCollection.Count;
-					var progress = 0;
+                await Task.Run(() =>
+                {
+                    double entries = packEntryCollection.Count;
+                    var progress = 0;
 
-					var bytes = packEntryCollection.Sum(p => p.DecompressedSize);
+                    var bytes = packEntryCollection.Sum(p => p.DecompressedSize);
 
-					Dispatcher.Invoke(() =>
-					{
-						ProgressBar.Value = 0;
-						ProgressBar.IsIndeterminate = false;
-						ProgressText.Text = $"0 of {entries} ({ByteSizeHelper.ToString(bytes)} left)";
-					});
+                    Dispatcher.Invoke(() =>
+                    {
+                        ProgressBar.Value = 0;
+                        ProgressBar.IsIndeterminate = false;
+                        ProgressText.Text = $"0 of {entries} ({ByteSizeHelper.ToString(bytes)} left)";
+                    });
 
-					var packName = "";
+                    var packName = "";
 
-					var beginningPack = selectedPackViewModels.FirstOrDefault().PackName;
+                    var beginningPack = selectedPackViewModels.FirstOrDefault().PackName;
 
-					packName = beginningPack.EndsWith("full.pack", StringComparison.OrdinalIgnoreCase)
-						? $"{selectedPackViewModels.LastOrDefault().PackVersion}_full.pack"
-						: $"{selectedPackViewModels.FirstOrDefault().PackVersion}_to_{selectedPackViewModels.LastOrDefault().PackVersion}.pack";
+                    packName = beginningPack.EndsWith("full.pack", StringComparison.OrdinalIgnoreCase)
+                        ? $"{selectedPackViewModels.LastOrDefault().PackVersion}_full.pack"
+                        : $"{selectedPackViewModels.FirstOrDefault().PackVersion}_to_{selectedPackViewModels.LastOrDefault().PackVersion}.pack";
 
-					using (var pw = new PackWriter($"{packagePath}\\{packName}", selectedPackViewModels.LastOrDefault().PackVersion))
-					{
-						foreach (var entry in packEntryCollection)
-						{
-							var fileStream = entry.GetCompressedDataAsStream();
+                    using (var pw = new PackWriter($"{packagePath}\\{packName}",
+                        selectedPackViewModels.LastOrDefault().PackVersion))
+                    {
+                        foreach (var entry in packEntryCollection)
+                        {
+                            var fileStream = entry.GetCompressedDataAsStream();
 
-							pw.WriteDirect(fileStream, entry.FullName, (int) entry.Seed, (int) entry.CompressedSize,
-								(int) entry.DecompressedSize, entry.IsCompressed, entry.CreationTime, entry.LastWriteTime,
-								entry.LastAccessTime);
-							fileStream.Dispose();
+                            pw.WriteDirect(fileStream, entry.FullName, (int)entry.Seed, (int)entry.CompressedSize,
+                                (int)entry.DecompressedSize, entry.IsCompressed, entry.CreationTime, entry.LastWriteTime,
+                                entry.LastAccessTime);
+                            fileStream.Dispose();
 
-							progress++;
-							bytes -= entry.DecompressedSize;
+                            progress++;
+                            bytes -= entry.DecompressedSize;
 
-							var progressLocal = progress;
-							var bytesLocal = bytes;
-							Dispatcher.Invoke(() =>
-							{
-								ProgressBar.Value = progressLocal / entries * 100;
-								ProgressText.Text = $"{progressLocal} of {entries} ({ByteSizeHelper.ToString(bytesLocal)} left)";
-							});
-						}
+                            var progressLocal = progress;
+                            var bytesLocal = bytes;
+                            Dispatcher.Invoke(() =>
+                            {
+                                ProgressBar.Value = progressLocal / entries * 100;
+                                ProgressText.Text = $"{progressLocal} of {entries} ({ByteSizeHelper.ToString(bytesLocal)} left)";
+                            });
+                        }
 
-						Dispatcher.Invoke(() =>
-						{
-							ProgressBar.Value = 0;
-							ProgressBar.IsIndeterminate = true;
-							ProgressText.Text = "Creating Pack File...";
-						});
+                        Dispatcher.Invoke(() =>
+                        {
+                            ProgressBar.Value = 0;
+                            ProgressBar.IsIndeterminate = true;
+                            ProgressText.Text = "Creating Pack File...";
+                        });
 
-						pw.Pack();
-					}
-				});
-			}
+                        try
+                        {
+                            pw.Pack();
+                        }
+                        catch (Exception ex)
+                        {
+                            _pluginContext.ShowDialog("Error during pack file creation.", $"{ex.Message}");
+                            _pluginContext.LogException(ex, false);
 
+                            Dispatcher.Invoke(() =>
+                            {
+                                ProgressBar.Value = 0;
+                                ProgressBar.IsIndeterminate = true;
+                                ProgressText.Text = "Packing failed!";
+
+                                PackOperationsLoader.IsOpen = false;
+
+                                _pluginContext.SetPatcherState(false);
+                                exceptionThrown = true;
+                            });
+                        }
+                        
+                    }
+                });
+            }
+
+		    if (exceptionThrown) return;
+			
 			await Task.Run(() =>
 			{
 				if (!PackOpsSettingsManager.Instance.PackOpsSettings.DeletePackFilesAfterMerge) return;
